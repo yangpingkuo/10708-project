@@ -174,6 +174,7 @@ if __name__ == "__main__":
     EPISODE_MAX = 100
     TARGET_UPDATE = 2000
     EPS_0 = 1.0
+    EPS = EPS_0
     EPS_MIN = 0.1
     EPS_LEN = 100000
     INITIAL_COLLECTION=10000

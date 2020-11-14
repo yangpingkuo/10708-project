@@ -173,7 +173,7 @@ if __name__ == "__main__":
     T_MAX = 2000
     EPISODE_MAX = 100
     TARGET_UPDATE = 2000
-    EPS = 1.0
+    EPS_0 = 1.0
     EPS_MIN = 0.1
     EPS_LEN = 100000
     INITIAL_COLLECTION=10000
@@ -221,7 +221,7 @@ if __name__ == "__main__":
             loss = optimize_model()
             if i_episode % TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
-        EPS = max(EPS_MIN, EPS*(EPS_LEN-global_step+INITIAL_COLLECTION)/EPS_LEN)
+        EPS = max(EPS_MIN, EPS_0*(EPS_LEN-global_step+INITIAL_COLLECTION)/EPS_LEN)
         
         train_hist += [tot_reward]
     

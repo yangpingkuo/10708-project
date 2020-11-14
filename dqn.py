@@ -214,11 +214,11 @@ if __name__ == "__main__":
                         torch.tensor(reward, dtype = torch.float32),
                         torch.tensor(done))
             tot_reward += reward
+            if done:
+                break  
             if global_step<INITIAL_COLLECTION:
                 continue
             loss = optimize_model()
-            if done:
-                break  
             if i_episode % TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
         EPS = max(EPS_MIN, EPS*(EPS_LEN-global_step+INITIAL_COLLECTION)/EPS_LEN)

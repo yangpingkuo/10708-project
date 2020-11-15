@@ -51,8 +51,9 @@ def simulate(env, horizon, policy, render = False):
 
 def preprocess(img):
     img_gray = np.mean(img, axis=2)
-    img_down = resize(img_gray,(84,84))
-    img_down = np.asarray(img_down,dtype = np.int8)
+    img_norm = img_gray/255.0
+    img_down = resize(img_norm,(84,84),anti_aliasing=False)
+    img_down = np.asarray(img_down,dtype = np.float)
     return torch.from_numpy(img_down)
 
 class ReplayMemory(object):
@@ -75,6 +76,9 @@ class ReplayMemory(object):
 
     def __len__(self):
         return len(self.memory)
+    
+    def __getitem__(self,idx):
+        return self.memory[idx]
 
 class DQN(nn.Module):
 
@@ -113,7 +117,6 @@ class DQN(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
-        
     
 def predict(state):
     q_vals = Q(state.to(device).unsqueeze(0).float() / 255).squeeze()
@@ -145,8 +148,8 @@ def optimize_model():
     optimizer.zero_grad()
     loss.backward()
 
-    for param in Q.parameters():
-        param.grad.data.clamp_(-1, 1)
+#    for param in Q.parameters():
+#        param.grad.data.clamp_(-1, 1)
 
     optimizer.step()
     return loss.detach().item()
@@ -210,7 +213,8 @@ if __name__ == "__main__":
             frame_buffer.append(preprocess(frame))
             next_state = torch.stack(frame_buffer[-4:])
             
-            memory.push(state, torch.tensor([action]), 
+            memory.push(state, 
+                        torch.tensor([action]), 
                         next_state,
                         torch.tensor(reward, dtype = torch.float32),
                         torch.tensor(done))

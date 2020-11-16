@@ -56,29 +56,46 @@ def preprocess(img):
     img_gray = np.dot(img[...,:3], [0.299, 0.587, 0.114])
     img_norm = img_gray/255.0
     img_down = imresize(img_norm,(84,84))
-    img_down = np.asarray(img_down,dtype = np.float)
+    img_down = np.asarray(img_down,dtype = np.float32)
     return torch.from_numpy(img_down)
 
 class ReplayMemory(object):
-    def __init__(self, capacity):
-        self.capacity = capacity
+    def __init__(self, config):
+        self.capacity = config.BUFFER_SIZE
         self.memory = []
         self.position = 0
-
-
+        self.full = False
+        #Preallocate Memory to ensure the RAM has enough capacity
+        self.memory = [None]*self.capacity
+        for i in np.arange(self.capacity):
+            self.memory[i] = (np.empty((config.FRAME_STACK, 84,84),dtype = np.float32),
+                              0,
+                              np.empty((config.FRAME_STACK, 84,84),dtype = np.float32),
+                              0,
+                              True)
+        
     def push(self, state, action, next_state, reward, done):
         """Saves a transition."""
         if len(self.memory) < self.capacity:
             self.memory.append(None)
         self.memory[self.position] = (state, action, next_state, 
                                       reward, done)
-        self.position = (self.position + 1) % self.capacity
+        self.position += 1
+        if self.position >= self.capacity:
+            self.full = True
+        self.position = self.position % self.capacity
 
     def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
+        if self.full:
+            return random.sample(self.memory, batch_size)
+        else:
+            return random.sample(self.memory[:self.position],batch_size)
 
     def __len__(self):
-        return len(self.memory)
+        if not self.full:
+            return self.position
+        else:
+            return self.capacity
     
     def __getitem__(self,idx):
         return self.memory[idx]
@@ -206,7 +223,7 @@ if __name__ == "__main__":
     target_Q.load_state_dict(Q.state_dict())
     target_Q.eval()
     
-    memory = ReplayMemory(config.BUFFER_SIZE)
+    memory = ReplayMemory(config)
     optimizer = optim.Adam(Q.parameters())
     global_step = 0
     for i_episode in range(config.EPISODE_MAX):
@@ -245,7 +262,7 @@ if __name__ == "__main__":
         
         train_hist += [tot_reward]
     
-        print("Epoch:%d Global step:%d Done:%s Total Reward:%.2f Time:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, done, tot_reward, t, eps, time.time() - t_start, len(memory)))
+        print("Epoch:%d Global step:%d Done:%s Total Reward:%.2f Time:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, done, tot_reward, t+1, eps, time.time() - t_start, len(memory)))
     
     ###
     

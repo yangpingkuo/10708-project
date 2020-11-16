@@ -234,7 +234,7 @@ if __name__ == "__main__":
                         next_state,
                         torch.tensor(cumulative_reward, dtype = torch.float32),
                         torch.tensor(done))
-            tot_reward += reward
+            tot_reward += cumulative_reward
             if done:
                 break  
             if global_step<config.INITIAL_COLLECTION:

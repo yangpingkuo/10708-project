@@ -85,12 +85,12 @@ class ReplayMemory(object):
 
 class DQN(nn.Module):
 
-    def __init__(self, out_size, hidden_size = 512): 
+    def __init__(self, config): 
         super(DQN, self).__init__()
 
         # an affine operation: y = Wx + b
         self.conv1 = nn.Conv2d(
-            in_channels=NUM_FRAMES,
+            in_channels=config.FRAME_STACK,
             out_channels=32,
             kernel_size=8,
             stride=4,
@@ -109,8 +109,8 @@ class DQN(nn.Module):
             kernel_size=3,
             stride=1,
             padding=0)
-        self.fc1 = nn.Linear(3136, hidden_size)  # 6*6 from image dimension
-        self.fc2 = nn.Linear(hidden_size, out_size)
+        self.fc1 = nn.Linear(3136, config.HIDDEN_SIZE)  # 6*6 from image dimension
+        self.fc2 = nn.Linear(config.HIDDEN_SIZE, config.OUT_SIZE)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))   # In: (4, 84, 84)  Out: (32, 20, 20)
@@ -121,9 +121,9 @@ class DQN(nn.Module):
         x = self.fc2(x)
         return x
     
-def predict(state):
+def predict(state,eps):
     q_vals = Q(state.to(device).unsqueeze(0).float() / 255).squeeze()
-    if np.random.rand() < EPS:
+    if np.random.rand() < eps:
         return np.random.randint(q_vals.shape[0])
     return q_vals.argmax().item()
 
@@ -172,9 +172,11 @@ def save_frames_as_gif(frames, path='./', filename='pong_animation.gif'):
     anim.save(path + filename, writer='imagemagick', fps=12)
     
 if __name__ == "__main__":
-    class CONFIG(object):
+    class NN_CONFIG(object):
+        HIDDEN_SIZE = 512
+        
+    class DQN_CONFIG(NN_CONFIG):
         BASE = 1000
-        NUM_FRAMES = 4
         BUFFER_SIZE = 200 * BASE 
         BATCH_SIZE = 32
         GAMMA = 0.99
@@ -182,24 +184,25 @@ if __name__ == "__main__":
         EPISODE_MAX = 500
         TARGET_UPDATE = 2*BASE
         EPS_0 = 1.0
-        EPS = EPS_0
         EPS_MIN = 0.1
-        EPS_LEN = 100 * BASE
+        EPS_LEN = BUFFER_SIZE
         INITIAL_COLLECTION=10 * BASE
         REPEAT_ACTIONS = 4
         FRAME_STACK = 4
-    config = CONFIG
+    
+        
+    config = DQN_CONFIG
     train_hist = []
     
     env = gym.make('PongDeterministic-v4')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     #device = torch.device('cpu')
-    
-    Q = DQN(env.action_space.n).to(device)
+    config.OUT_SIZE = env.action_space.n
+    Q = DQN(config).to(device)
     ####### load model ##########
     #Q.load_state_dict(torch.load('pong_Q'))
     
-    target_Q = DQN(env.action_space.n).to(device)
+    target_Q = DQN(config).to(device)
     target_Q.load_state_dict(Q.state_dict())
     target_Q.eval()
     
@@ -211,11 +214,12 @@ if __name__ == "__main__":
         frame = env.reset()
         frame_buffer = config.FRAME_STACK * [preprocess(frame)]
         t_start = time.time()
+        eps = max(config.EPS_MIN, config.EPS_0*(config.EPS_LEN-global_step+config.INITIAL_COLLECTION)/config.EPS_LEN)
         for t in range(config.T_MAX):
             global_step+=1
             state = torch.stack(frame_buffer[-config.FRAME_STACK:])
             #action = np.random.randint(env.action_space.n) 
-            action = predict(state)
+            action = predict(state,eps)
             cumulative_reward = 0
             for i in np.arange(config.REPEAT_ACTIONS):    
                 frame, reward, done, info = env.step(action)
@@ -238,11 +242,10 @@ if __name__ == "__main__":
             loss = optimize_model(config)
             if i_episode % config.TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
-        EPS = max(config.EPS_MIN, config.EPS_0*(config.EPS_LEN-global_step+config.INITIAL_COLLECTION)/config.EPS_LEN)
         
         train_hist += [tot_reward]
     
-        print("Epoch:%d Global step:%d Done:%s Total Reward:%.2f Time:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, done, tot_reward, t, EPS, time.time() - t_start, len(memory)))
+        print("Epoch:%d Global step:%d Done:%s Total Reward:%.2f Time:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, done, tot_reward, t, eps, time.time() - t_start, len(memory)))
     
     ###
     

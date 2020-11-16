@@ -13,10 +13,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import torchvision.transforms as T
-from torch.distributions import Categorical, Normal
 from matplotlib import animation
-from copy import deepcopy
 import matplotlib.pyplot as plt
 from cv2 import resize as imresize
 import psutil
@@ -68,15 +65,29 @@ class ReplayMemory(object):
         self.count = 0
         #Preallocate Memory to ensure the RAM has enough capacity
         self.memory = [None]*self.capacity
-        for i in np.arange(self.capacity):
-            self.memory[i] = (torch.tensor(np.zeros((config.FRAME_STACK, 84,84),dtype = np.float32)),
-                              torch.tensor([0]),
-                              torch.tensor(np.zeros((config.FRAME_STACK, 84,84),dtype = np.float32)),
-                              torch.tensor(0,dtype = torch.float32),
-                              torch.tensor(True))
-            if i%1000==0:
-                if (psutil.virtual_memory().available / psutil.virtual_memory().total) < 0.01:
-                    raise MemoryError("Insufficient memory for replay buffer.")
+
+    def init_buffer(self,env):
+        print("Collecting: ", end = '')
+        frame = env.reset()
+        frame_buffer = 4 * [preprocess(frame)]
+        while self.__len__() < self.capacity:
+            state = torch.stack(frame_buffer[-4:])
+            action = np.random.randint(env.action_space.n) 
+            frame, reward, done, info = env.step(action)
+            frame_buffer.append(preprocess(frame))
+            next_state = torch.stack(frame_buffer[-4:])
+            
+            memory.push(state, torch.tensor([action]), 
+                        next_state,
+                        torch.tensor(reward, dtype = torch.float32),
+                        torch.tensor(done))
+            
+            if (len(memory) % (self.capacity // 100) == 0): 
+                print("{:.2f}  ".format(len(memory) / self.capacity ), end = '')
+                
+            if done:
+                frame = env.reset()
+                frame_buffer = 4 * [preprocess(frame)]
         
     def push(self, state, action, next_state, reward, done):
         """Saves a transition."""
@@ -102,36 +113,30 @@ class DQN(nn.Module):
         # an affine operation: y = Wx + b
         self.conv1 = nn.Conv2d(
             in_channels=config.FRAME_STACK,
-            out_channels=32,
+            out_channels=16,
             kernel_size=8,
             stride=4,
-            padding=0)
+            padding=2)
         
         self.conv2 = nn.Conv2d(
-            in_channels=32,
-            out_channels=64,
+            in_channels=16,
+            out_channels=32,
             kernel_size=4,
             stride=2,
-            padding=0)
+            padding=1)
         
-        self.conv3 = nn.Conv2d(
-            in_channels=64,
-            out_channels=64,
-            kernel_size=3,
-            stride=1,
-            padding=0)
-        self.fc1 = nn.Linear(3136, config.HIDDEN_SIZE)  # 6*6 from image dimension
-        self.fc2 = nn.Linear(config.HIDDEN_SIZE, config.OUT_SIZE)
+        self.fc1 = nn.Linear(3200, config.HIDDEN_SIZE)  # 6*6 from image dimension
+        #self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.out = nn.Linear(config.HIDDEN_SIZE, config.OUT_SIZE)
 
     def forward(self, x):
-        x = F.relu(self.conv1(x))   # In: (4, 84, 84)  Out: (32, 20, 20)
-        x = F.relu(self.conv2(x))    # In: (32, 20, 20) Out: (64, 9, 9)
-        x = F.relu(self.conv3(x))    # In: (64,7,7)   Out: (64,7,7)
+        x = F.relu(self.conv1(x))   # In: (4, 105, 80)  Out: (16, 26, 20)
+        x = F.relu(self.conv2(x))    # In: (16, 26, 20) Out: (32, 13, 10)
         x = x.view(x.size()[0], -1)  # In: (32, 13, 10) Out: (4160,)
+
         x = F.relu(self.fc1(x))
-        x = self.fc2(x)
+        x = self.out(x)
         return x
-    
     def predict(self,state,eps):
         q_vals = self(state.to(device).unsqueeze(0)).squeeze()
         if np.random.rand() < eps:
@@ -184,7 +189,7 @@ def save_frames_as_gif(frames, path='./', filename='pong_animation.gif'):
     
 if __name__ == "__main__":
     class NN_CONFIG(object):
-        HIDDEN_SIZE = 512
+        HIDDEN_SIZE = 256
         
     class DQN_CONFIG(NN_CONFIG):
         BASE = 500
@@ -196,7 +201,7 @@ if __name__ == "__main__":
         TARGET_UPDATE = 2*BASE
         EPS_0 = 1.0
         EPS_MIN = 0.1
-        EPS_LEN = BUFFER_SIZE
+        EPS_LEN = 2*BUFFER_SIZE
         INITIAL_COLLECTION=10 * BASE
         REPEAT_ACTIONS = 4
         FRAME_STACK = 4
@@ -218,11 +223,11 @@ if __name__ == "__main__":
     target_Q.eval()
     
     memory = ReplayMemory(config)
+    memory.init_buffer(env)
     optimizer = optim.Adam(Q.parameters())
     global_step = 0
     frame_buffer = []
     for i_episode in range(config.EPISODE_MAX):
-        print(psutil.virtual_memory().available / psutil.virtual_memory().total)
         tot_reward = 0
         frame = env.reset()
         frame_buffer = config.FRAME_STACK * [preprocess(frame)]
@@ -255,7 +260,6 @@ if __name__ == "__main__":
                 target_Q.load_state_dict(Q.state_dict())
         
         train_hist += [tot_reward]
-    
         print("Epoch:%d Global step:%d Done:%s Total Reward:%.2f Time:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, done, tot_reward, t+1, eps, time.time() - t_start, len(memory)))
     
     ###

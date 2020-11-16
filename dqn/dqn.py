@@ -18,9 +18,11 @@ from torch.distributions import Categorical, Normal
 from matplotlib import animation
 from copy import deepcopy
 import matplotlib.pyplot as plt
-from skimage.transform import resize
+from cv2 import resize as imresize
 import random
-import time
+
+### Import for testing should be removed to main after
+#from dqn.environment import GymEnvironment
 
 def simulate(env, horizon, policy, render = False):
     tot_reward = 0
@@ -50,9 +52,10 @@ def simulate(env, horizon, policy, render = False):
 
 
 def preprocess(img):
-    img_gray = np.mean(img, axis=2)
+#    img_gray = np.mean(img, axis=2)
+    img_gray = np.dot(img[...,:3], [0.299, 0.587, 0.114])
     img_norm = img_gray/255.0
-    img_down = resize(img_norm,(84,84),anti_aliasing=False)
+    img_down = imresize(img_norm,(84,84))
     img_down = np.asarray(img_down,dtype = np.float)
     return torch.from_numpy(img_down)
 
@@ -82,7 +85,7 @@ class ReplayMemory(object):
 
 class DQN(nn.Module):
 
-    def __init__(self, out_size, hidden_size = 256): 
+    def __init__(self, out_size, hidden_size = 512): 
         super(DQN, self).__init__()
 
         # an affine operation: y = Wx + b
@@ -124,11 +127,11 @@ def predict(state):
         return np.random.randint(q_vals.shape[0])
     return q_vals.argmax().item()
 
-def optimize_model():
-    if len(memory) < BATCH_SIZE:
+def optimize_model(config):
+    if len(memory) < config.BATCH_SIZE:
         return None
     
-    transitions = memory.sample(BATCH_SIZE)
+    transitions = memory.sample(config.BATCH_SIZE)
     batch = tuple(zip(*transitions) )
 
     batch_state = torch.stack(batch[0]).to(device).float() / 255
@@ -140,7 +143,7 @@ def optimize_model():
     current_Q = Q(batch_state).gather(1, batch_action)
 
     expected_Q = batch_reward.float()
-    expected_Q[~batch_done] += GAMMA * target_Q(batch_next_state[~batch_done]).max(1)[0].detach()
+    expected_Q[~batch_done] += config.GAMMA * target_Q(batch_next_state[~batch_done]).max(1)[0].detach()
 
     loss = F.mse_loss(current_Q, expected_Q.unsqueeze(1))
     #loss = F.smooth_l1_loss(current_Q, current_Q.unsqueeze(1))
@@ -148,8 +151,8 @@ def optimize_model():
     optimizer.zero_grad()
     loss.backward()
 
-#    for param in Q.parameters():
-#        param.grad.data.clamp_(-1, 1)
+    for param in Q.parameters():
+        param.grad.data.clamp_(-1, 1)
 
     optimizer.step()
     return loss.detach().item()
@@ -169,18 +172,23 @@ def save_frames_as_gif(frames, path='./', filename='pong_animation.gif'):
     anim.save(path + filename, writer='imagemagick', fps=12)
     
 if __name__ == "__main__":
-    NUM_FRAMES = 4
-    BUFFER_SIZE = 200000#100000
-    BATCH_SIZE = 64
-    GAMMA = 0.99
-    T_MAX = 2000
-    EPISODE_MAX = 100
-    TARGET_UPDATE = 2000
-    EPS_0 = 1.0
-    EPS = EPS_0
-    EPS_MIN = 0.1
-    EPS_LEN = 100000
-    INITIAL_COLLECTION=10000
+    class CONFIG(object):
+        BASE = 1000
+        NUM_FRAMES = 4
+        BUFFER_SIZE = 200 * BASE 
+        BATCH_SIZE = 32
+        GAMMA = 0.99
+        T_MAX = 2000
+        EPISODE_MAX = 500
+        TARGET_UPDATE = 2*BASE
+        EPS_0 = 1.0
+        EPS = EPS_0
+        EPS_MIN = 0.1
+        EPS_LEN = 100 * BASE
+        INITIAL_COLLECTION=10 * BASE
+        REPEAT_ACTIONS = 4
+        FRAME_STACK = 4
+    config = CONFIG
     train_hist = []
     
     env = gym.make('PongDeterministic-v4')
@@ -195,38 +203,42 @@ if __name__ == "__main__":
     target_Q.load_state_dict(Q.state_dict())
     target_Q.eval()
     
-    memory = ReplayMemory(BUFFER_SIZE)
+    memory = ReplayMemory(config.BUFFER_SIZE)
     optimizer = optim.Adam(Q.parameters())
     global_step = 0
-    for i_episode in range(EPISODE_MAX):
+    for i_episode in range(config.EPISODE_MAX):
         tot_reward = 0
         frame = env.reset()
-        frame_buffer = 4 * [preprocess(frame)]
-        
+        frame_buffer = config.FRAME_STACK * [preprocess(frame)]
         t_start = time.time()
-        for t in range(T_MAX):
+        for t in range(config.T_MAX):
             global_step+=1
-            state = torch.stack(frame_buffer[-4:])
+            state = torch.stack(frame_buffer[-config.FRAME_STACK:])
             #action = np.random.randint(env.action_space.n) 
             action = predict(state)
-            frame, reward, done, info = env.step(action)
+            cumulative_reward = 0
+            for i in np.arange(config.REPEAT_ACTIONS):    
+                frame, reward, done, info = env.step(action)
+                if done:
+                    break
+                cumulative_reward += reward
             frame_buffer.append(preprocess(frame))
-            next_state = torch.stack(frame_buffer[-4:])
+            next_state = torch.stack(frame_buffer[-config.FRAME_STACK:])
             
             memory.push(state, 
                         torch.tensor([action]), 
                         next_state,
-                        torch.tensor(reward, dtype = torch.float32),
+                        torch.tensor(cumulative_reward, dtype = torch.float32),
                         torch.tensor(done))
             tot_reward += reward
             if done:
                 break  
-            if global_step<INITIAL_COLLECTION:
+            if global_step<config.INITIAL_COLLECTION:
                 continue
-            loss = optimize_model()
-            if i_episode % TARGET_UPDATE == 0:
+            loss = optimize_model(config)
+            if i_episode % config.TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
-        EPS = max(EPS_MIN, EPS_0*(EPS_LEN-global_step+INITIAL_COLLECTION)/EPS_LEN)
+        EPS = max(config.EPS_MIN, config.EPS_0*(config.EPS_LEN-global_step+config.INITIAL_COLLECTION)/config.EPS_LEN)
         
         train_hist += [tot_reward]
     

@@ -19,6 +19,7 @@ from matplotlib import animation
 from copy import deepcopy
 import matplotlib.pyplot as plt
 from cv2 import resize as imresize
+import psutil
 import random
 
 ### Import for testing should be removed to main after
@@ -37,7 +38,7 @@ def simulate(env, horizon, policy, render = False):
             time.sleep(1/24)
             
         state = torch.stack(frame_buffer[-4:]) 
-        action = policy(state)
+        action = policy.predict(state)
         frame, reward, done, info = env.step(action)
         frame_buffer.append(preprocess(frame))
         next_state = torch.stack(frame_buffer[-4:])
@@ -54,7 +55,7 @@ def simulate(env, horizon, policy, render = False):
 def preprocess(img):
 #    img_gray = np.mean(img, axis=2)
     img_gray = np.dot(img[...,:3], [0.299, 0.587, 0.114])
-    img_norm = img_gray/255.0
+    img_norm = img_gray/255.
     img_down = imresize(img_norm,(84,84))
     img_down = np.asarray(img_down,dtype = np.float32)
     return torch.from_numpy(img_down)
@@ -64,36 +65,31 @@ class ReplayMemory(object):
         self.capacity = config.BUFFER_SIZE
         self.memory = []
         self.position = 0
-        self.full = False
+        self.count = 0
         #Preallocate Memory to ensure the RAM has enough capacity
         self.memory = [None]*self.capacity
         for i in np.arange(self.capacity):
-            self.memory[i] = (np.empty((config.FRAME_STACK, 84,84),dtype = np.float32),
-                              0,
-                              np.empty((config.FRAME_STACK, 84,84),dtype = np.float32),
-                              0,
-                              True)
+            self.memory[i] = (torch.tensor(np.zeros((config.FRAME_STACK, 84,84),dtype = np.float32)),
+                              torch.tensor([0]),
+                              torch.tensor(np.zeros((config.FRAME_STACK, 84,84),dtype = np.float32)),
+                              torch.tensor(0,dtype = torch.float32),
+                              torch.tensor(True))
+            if i%1000==0:
+                if (psutil.virtual_memory().available / psutil.virtual_memory().total) < 0.01:
+                    raise MemoryError("Insufficient memory for replay buffer.")
         
     def push(self, state, action, next_state, reward, done):
         """Saves a transition."""
         self.memory[self.position] = (state, action, next_state, 
                                       reward, done)
-        self.position += 1
-        if self.position >= self.capacity:
-            self.full = True
-        self.position = self.position % self.capacity
+        self.count = max(self.count,self.position+1)
+        self.position = (self.position+1) % self.capacity
 
     def sample(self, batch_size):
-        if self.full:
-            return random.sample(self.memory, batch_size)
-        else:
-            return random.sample(self.memory[:self.position],batch_size)
+        return random.sample(self.memory[:self.count],batch_size)
 
     def __len__(self):
-        if not self.full:
-            return self.position
-        else:
-            return self.capacity
+        return self.count
     
     def __getitem__(self,idx):
         return self.memory[idx]
@@ -136,22 +132,22 @@ class DQN(nn.Module):
         x = self.fc2(x)
         return x
     
-def predict(state,eps):
-    q_vals = Q(state.to(device).unsqueeze(0).float() / 255).squeeze()
-    if np.random.rand() < eps:
-        return np.random.randint(q_vals.shape[0])
-    return q_vals.argmax().item()
+    def predict(self,state,eps):
+        q_vals = self(state.to(device).unsqueeze(0)).squeeze()
+        if np.random.rand() < eps:
+            return np.random.randint(q_vals.shape[0])
+        return q_vals.argmax().item()
 
-def optimize_model(config):
+def optimize_model(Q,target_Q,config):
     if len(memory) < config.BATCH_SIZE:
         return None
     
     transitions = memory.sample(config.BATCH_SIZE)
     batch = tuple(zip(*transitions) )
 
-    batch_state = torch.stack(batch[0]).to(device).float() / 255
+    batch_state = torch.stack(batch[0]).to(device)
     batch_action = torch.stack(batch[1]).to(device)
-    batch_next_state = torch.stack(batch[2]).to(device).float() / 255
+    batch_next_state = torch.stack(batch[2]).to(device)
     batch_reward = torch.stack(batch[3]).to(device)
     batch_done = torch.stack(batch[4]).to(device)
 
@@ -191,7 +187,7 @@ if __name__ == "__main__":
         HIDDEN_SIZE = 512
         
     class DQN_CONFIG(NN_CONFIG):
-        BASE = 1000
+        BASE = 500
         BUFFER_SIZE = 200 * BASE 
         BATCH_SIZE = 32
         GAMMA = 0.99
@@ -224,7 +220,9 @@ if __name__ == "__main__":
     memory = ReplayMemory(config)
     optimizer = optim.Adam(Q.parameters())
     global_step = 0
+    frame_buffer = []
     for i_episode in range(config.EPISODE_MAX):
+        print(psutil.virtual_memory().available / psutil.virtual_memory().total)
         tot_reward = 0
         frame = env.reset()
         frame_buffer = config.FRAME_STACK * [preprocess(frame)]
@@ -233,8 +231,7 @@ if __name__ == "__main__":
         for t in range(config.T_MAX):
             global_step+=1
             state = torch.stack(frame_buffer[-config.FRAME_STACK:])
-            #action = np.random.randint(env.action_space.n) 
-            action = predict(state,eps)
+            action = Q.predict(state,eps)
             cumulative_reward = 0
             for i in np.arange(config.REPEAT_ACTIONS):    
                 frame, reward, done, info = env.step(action)
@@ -243,7 +240,6 @@ if __name__ == "__main__":
                 cumulative_reward += reward
             frame_buffer.append(preprocess(frame))
             next_state = torch.stack(frame_buffer[-config.FRAME_STACK:])
-            
             memory.push(state, 
                         torch.tensor([action]), 
                         next_state,
@@ -254,7 +250,7 @@ if __name__ == "__main__":
                 break  
             if global_step<config.INITIAL_COLLECTION:
                 continue
-            loss = optimize_model(config)
+            loss = optimize_model(Q,target_Q,config)
             if i_episode % config.TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
         
@@ -272,7 +268,7 @@ if __name__ == "__main__":
     plt.ylabel('Total Reward', fontsize = 20)
     
     ###
-    _ = simulate(env, 100, predict, True)
+    _ = simulate(env, 100, Q, True)
     torch.save(Q.state_dict(), 'pong_Q')
     torch.save(target_Q.state_dict(), 'pong_Q_target')
     env = gym.make('PongDeterministic-v4')
@@ -284,7 +280,7 @@ if __name__ == "__main__":
     Q.load_state_dict(torch.load('pong_Q'))
     target_Q.load_state_dict(torch.load('pong_Q_target'))
     
-    reward_tot, reward, t, done, frames = simulate(env, 500, predict, True)
+    reward_tot, reward, t, done, frames = simulate(env, 500, Q, True)
     save_frames_as_gif(frames[::4])
     
 

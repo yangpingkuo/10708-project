@@ -327,7 +327,8 @@ if __name__ == "__main__":
             loss = optimize_model(Q,target_Q,memory,config)
             if i_episode % config.TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
-        
+                torch.save(Q.state_dict(), 'pong_Q%d'%(global_step))
+                torch.save(target_Q.state_dict(), 'pong_Q_target%d'%(global_step))
         train_hist += [tot_reward]
         print("Epoch:%d Global step:%d Done:%s Total Reward:%.2f Time:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, done, tot_reward, t+1, eps, time.time() - t_start, len(memory)))
     

@@ -76,8 +76,6 @@ class ReplayMemory(object):
         
     def push(self, state, action, next_state, reward, done):
         """Saves a transition."""
-        if len(self.memory) < self.capacity:
-            self.memory.append(None)
         self.memory[self.position] = (state, action, next_state, 
                                       reward, done)
         self.position += 1

@@ -8,7 +8,7 @@ Created on Sat Nov 14 04:48:51 2020
 import gym
 import numpy as np
 import time
-
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -268,7 +268,7 @@ if __name__ == "__main__":
         IMAGE_SIZE = (84,84)
         GAMMA = 0.99
         T_MAX = 3000
-        EPISODE_MAX = 500
+        EPISODE_MAX = 10
         TARGET_UPDATE = 2*BASE
         EPS_0 = 1.0
         EPS_MIN = 0.1
@@ -300,6 +300,7 @@ if __name__ == "__main__":
     print("Begin initial replay memory collection.\n")
     init_memory(env,memory,config.INITIAL_COLLECTION)
     frame_buffer = History(config)
+    save_list = []
     print("Begin training.")
     for i_episode in range(config.EPISODE_MAX):
         tot_reward = 0
@@ -331,7 +332,11 @@ if __name__ == "__main__":
             if i_episode % config.TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
                 torch.save(Q.state_dict(), 'pong_Q%d'%(global_step))
-                torch.save(target_Q.state_dict(), 'pong_Q_target%d'%(global_step))
+                torch.save(target_Q.state_dict(), 'pong_Q_target_%d'%(global_step))
+                save_list.append(('pong_Q%d'%(global_step),'pong_Q_target_%d'%(global_step)))
+                if len(save_list) > config.SAVE_LATEST:
+                    [os.remove(x) for x in save_list.pop(0)]
+                    
         train_hist += [tot_reward]
         print("Epoch:%d Global step:%d Loss:%s Q value: %.3f Total Reward:%.2f Trail Length:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, loss, q_val, tot_reward, t+1, eps, time.time() - t_start, len(memory)))
     
@@ -347,15 +352,15 @@ if __name__ == "__main__":
     ###
     env.random_start = 0
     _ = simulate(env, 100, Q,config, True)
-    torch.save(Q.state_dict(), 'pong_Q')
-    torch.save(target_Q.state_dict(), 'pong_Q_target')
+    torch.save(Q.state_dict(), 'pong_Q_final')
+    torch.save(target_Q.state_dict(), 'pong_Q_target_final')
 
     Q = DQN(config).to(device)
     target_Q = DQN(config).to(device)
     ####### load model ##########
     
-    Q.load_state_dict(torch.load('pong_Q'))
-    target_Q.load_state_dict(torch.load('pong_Q_target'))
+    Q.load_state_dict(torch.load('pong_Q_final'))
+    target_Q.load_state_dict(torch.load('pong_Q_target_final'))
     
     reward_tot, reward, t, done, frames = simulate(env, 500, Q,config, True)
     save_frames_as_gif(frames[::4])

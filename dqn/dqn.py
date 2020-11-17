@@ -176,29 +176,30 @@ def init_memory(env,buffer,initial_size):
         if done:
             env.new_game()
 
-def simulate(env, horizon, policy, render = False):
+def simulate(env, horizon, policy,config, render = False):
     tot_reward = 0
     frame = env.new_game()
-    frame_buffer = 4 * [preprocess(frame)]
+    frame_buffer = History(config)
+    for _ in np.arange(config.FRAME_STACK):
+        frame_buffer.add(frame)
     movie_frame = []
     for t in range(horizon):
         if render:
             #env.render()
-            env.render()
-            movie_frame.append(env.render(mode="rgb_array"))
+            env.env.render()
+            movie_frame.append(env.env.render(mode="rgb_array"))
             time.sleep(1/24)
             
-        state = torch.stack(frame_buffer[-4:]) 
-        action = policy.predict(state)
+        state = frame_buffer.get()
+        action = policy.predict(state,eps = 0)
         frame, reward, done, info = env.step(action)
-        frame_buffer.append(preprocess(frame))
-        next_state = torch.stack(frame_buffer[-4:])
+        frame_buffer.add(frame)
         tot_reward += reward
         if done:
             break
             
     if render:    
-        env.close()
+        env.env.close()
             
     return tot_reward, reward, done, t, movie_frame
 
@@ -237,7 +238,7 @@ def optimize_model(Q,target_Q,memory,config):
         param.grad.data.clamp_(-1, 1)
 
     optimizer.step()
-    return loss.detach().item()
+    return loss.detach().item(),current_Q.mean().item()
 
 def save_frames_as_gif(frames, path='./', filename='pong_animation.gif'):
 
@@ -256,12 +257,12 @@ def save_frames_as_gif(frames, path='./', filename='pong_animation.gif'):
 if __name__ == "__main__":
     class ENVIROMENT_CONFIG(object):
         ENV_NAME = 'PongDeterministic-v4'
-        RANDOM_START = 30
+        RANDOM_START = 5
     class NN_CONFIG(ENVIROMENT_CONFIG):
         HIDDEN_SIZE = 256
         
     class DQN_CONFIG(NN_CONFIG):
-        BASE = 5000
+        BASE = 50
         BUFFER_SIZE = 200 * BASE 
         BATCH_SIZE = 32
         IMAGE_SIZE = (84,84)
@@ -275,7 +276,8 @@ if __name__ == "__main__":
         INITIAL_COLLECTION=10 * BASE
         REPEAT_ACTIONS = 1
         FRAME_STACK = 4
-    
+        LEARNING_RATE = 1e-4
+        SAVE_LATEST = 5
         
     config = DQN_CONFIG
     train_hist = []
@@ -293,7 +295,7 @@ if __name__ == "__main__":
     target_Q.eval()
     
     memory = ReplayMemory(config)
-    optimizer = optim.Adam(Q.parameters())
+    optimizer = optim.Adam(Q.parameters(),lr = config.LEARNING_RATE)
     global_step = 0
     print("Begin initial replay memory collection.\n")
     init_memory(env,memory,config.INITIAL_COLLECTION)
@@ -302,7 +304,8 @@ if __name__ == "__main__":
     for i_episode in range(config.EPISODE_MAX):
         tot_reward = 0
         frame = env.new_game()
-        frame_buffer.add(frame)
+        for _ in np.arange(config.FRAME_STACK):
+            frame_buffer.add(frame)
         t_start = time.time()
         eps = max(config.EPS_MIN, config.EPS_0*(config.EPS_LEN-global_step)/config.EPS_LEN)
         for t in range(config.T_MAX):
@@ -324,13 +327,13 @@ if __name__ == "__main__":
             tot_reward += cumulative_reward
             if done:
                 break  
-            loss = optimize_model(Q,target_Q,memory,config)
+            loss,q_val = optimize_model(Q,target_Q,memory,config)
             if i_episode % config.TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
                 torch.save(Q.state_dict(), 'pong_Q%d'%(global_step))
                 torch.save(target_Q.state_dict(), 'pong_Q_target%d'%(global_step))
         train_hist += [tot_reward]
-        print("Epoch:%d Global step:%d Done:%s Total Reward:%.2f Time:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, done, tot_reward, t+1, eps, time.time() - t_start, len(memory)))
+        print("Epoch:%d Global step:%d Loss:%s Q value: %.3f Total Reward:%.2f Trail Length:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, loss, q_val, tot_reward, t+1, eps, time.time() - t_start, len(memory)))
     
     ###
     
@@ -342,19 +345,19 @@ if __name__ == "__main__":
     plt.ylabel('Total Reward', fontsize = 20)
     
     ###
-    _ = simulate(env, 100, Q, True)
+    env.random_start = 0
+    _ = simulate(env, 100, Q,config, True)
     torch.save(Q.state_dict(), 'pong_Q')
     torch.save(target_Q.state_dict(), 'pong_Q_target')
-    env = gym.make('PongDeterministic-v4')
 
-    Q = DQN(env.action_space.n).to(device)
-    target_Q = DQN(env.action_space.n).to(device)
+    Q = DQN(config).to(device)
+    target_Q = DQN(config).to(device)
     ####### load model ##########
     
     Q.load_state_dict(torch.load('pong_Q'))
     target_Q.load_state_dict(torch.load('pong_Q_target'))
     
-    reward_tot, reward, t, done, frames = simulate(env, 500, Q, True)
+    reward_tot, reward, t, done, frames = simulate(env, 500, Q,config, True)
     save_frames_as_gif(frames[::4])
     
 

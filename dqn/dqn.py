@@ -212,7 +212,7 @@ def preprocess(img):
     img_down = np.asarray(img_down,dtype = np.float16)
     return img_down          
 
-def optimize_model(Q,target_Q,memory,config):
+def optimize_model(Q,target_Q,memory,config,optimizer):
     if len(memory) < config.BATCH_SIZE:
         return None
     
@@ -262,18 +262,18 @@ if __name__ == "__main__":
         HIDDEN_SIZE = 256
         
     class DQN_CONFIG(NN_CONFIG):
-        BASE = 50
+        BASE = 1000
         BUFFER_SIZE = 200 * BASE 
         BATCH_SIZE = 32
         IMAGE_SIZE = (84,84)
         GAMMA = 0.99
-        T_MAX = 3000
-        EPISODE_MAX = 10
-        TARGET_UPDATE = 2*BASE
+        T_MAX = 5000
+        EPISODE_MAX = 1000
+        TARGET_UPDATE = 1*BASE
         EPS_0 = 1.0
         EPS_MIN = 0.1
-        EPS_LEN = BUFFER_SIZE
-        INITIAL_COLLECTION=10 * BASE
+        EPS_LEN = 2*BUFFER_SIZE
+        INITIAL_COLLECTION=50 * BASE
         REPEAT_ACTIONS = 1
         FRAME_STACK = 4
         LEARNING_RATE = 1e-4
@@ -295,7 +295,7 @@ if __name__ == "__main__":
     target_Q.eval()
     
     memory = ReplayMemory(config)
-    optimizer = optim.Adam(Q.parameters(),lr = config.LEARNING_RATE)
+    opt = optim.Adam(Q.parameters(),lr = config.LEARNING_RATE)
     global_step = 0
     print("Begin initial replay memory collection.\n")
     init_memory(env,memory,config.INITIAL_COLLECTION)
@@ -328,7 +328,7 @@ if __name__ == "__main__":
             tot_reward += cumulative_reward
             if done:
                 break  
-            loss,q_val = optimize_model(Q,target_Q,memory,config)
+            loss,q_val = optimize_model(Q,target_Q,memory,config,opt)
             if i_episode % config.TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
                 torch.save(Q.state_dict(), 'pong_Q%d'%(global_step))

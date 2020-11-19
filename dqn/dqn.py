@@ -226,7 +226,7 @@ if __name__ == "__main__":
         INITIAL_COLLECTION=50 * BASE
         REPEAT_ACTIONS = 1
         FRAME_STACK = 4
-        LEARNING_RATE = 1e-4
+        LEARNING_RATE = 1e-2
         SAVE_LATEST = 5
         
     config = DQN_CONFIG

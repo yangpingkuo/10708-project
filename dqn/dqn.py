@@ -259,16 +259,16 @@ if __name__ == "__main__":
         HIDDEN_SIZE = 256
         
     class DQN_CONFIG(NN_CONFIG):
-        BASE = 1000
-        BUFFER_SIZE = 200 * BASE 
+        BASE = 100
+        BUFFER_SIZE = 500 * BASE 
         BATCH_SIZE = 32
         IMAGE_SIZE = (84,84)
-        GAMMA = 0.99
+        GAMMA = 1.0
         T_MAX = 5000
         EPISODE_MAX = 5000
-        TARGET_UPDATE = 10*BASE
-        EPS_0 = 1.0
-        EPS_MIN = 0.1
+        TARGET_UPDATE = 5*BASE
+        EPS_0 = 0.1
+        EPS_MIN = 0.02
         EPS_LEN = 5*BUFFER_SIZE
         INITIAL_COLLECTION=50 * BASE
         REPEAT_ACTIONS = 1

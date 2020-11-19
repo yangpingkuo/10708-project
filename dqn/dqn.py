@@ -225,7 +225,7 @@ def train_step():
     batch_next_state = batch_next_state.to(config.DEVICE)
     batch_action = batch_action.to(config.DEVICE)
     batch_reward = batch_reward.to(config.DEVICE)
-    batch_done = batch_done.to(config.DEVICE).byte()
+    batch_done = batch_done.to(config.DEVICE)
 
     current_Q = Q(batch_state).gather(1, batch_action.unsqueeze(1).long())
 
@@ -267,9 +267,9 @@ if __name__ == "__main__":
         T_MAX = 5000
         EPISODE_MAX = 5000
         TARGET_UPDATE = 5*BASE
-        EPS_0 = 0.1
+        EPS_0 = 1.0
         EPS_MIN = 0.02
-        EPS_LEN = 5*BUFFER_SIZE
+        EPS_LEN = 100*BASE
         INITIAL_COLLECTION=50 * BASE
         REPEAT_ACTIONS = 1
         FRAME_STACK = 4

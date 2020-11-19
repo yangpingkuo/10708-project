@@ -15,6 +15,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from matplotlib import animation
 import matplotlib.pyplot as plt
+import cv2
 from cv2 import resize as imresize
 from tqdm import tqdm
 import psutil
@@ -27,16 +28,16 @@ class Enviroment(object):
     def __init__(self,config):
         self.env = gym.make(config.ENV_NAME)
         self.random_start = config.RANDOM_START
-        self.config = config
+        self.dtype = config.IMG_DTYPE
     def new_game(self):
         frame = self.env.reset()
         for _ in np.arange(random.randint(0,self.random_start)):
             frame, reward, done, info = self.env.step(0)
-        return preprocess(frame,self.config.IMG_DTYPE)
+        return preprocess(frame,self.dtype)
     
     def step(self,action):
         frame, reward, done, info = self.env.step(action)
-        return preprocess(frame,self.config.IMG_DTYPE),reward,done,info
+        return preprocess(frame,self.dtype),reward,done,info
     
     def random_step(self):
         action = self.env.action_space.sample()
@@ -66,22 +67,30 @@ class ReplayMemory(object):
         self.done[self.position] = done
         self.count = max(self.count,self.position+1)
         self.position = (self.position+1) % self.capacity
-
+        
     def get_state(self,index):
         assert self.count > 0, "replay memory is empy, use at least --random_steps 1"
-        return self.images[(index - (self.history_length - 1)):(index + 1), ...]
-
+        index = (index%self.count)
+        if index >= self.history_length-1:    
+            return self.images[(index - (self.history_length - 1)):(index + 1), ...]
+        else:
+            indexes = self._circular_index(index + 1 - self.history_length,index+1)
+            return self.images[indexes, ...]
+    
+    def _circular_index(self,start,end):
+        return np.arange(start,end)%self.count
+    
     def sample(self):
         assert self.count > self.history_length
         indexes = []
         while len(indexes) < self.batch_size:
             while True:
-                index = random.randint(self.history_length, self.count - 1)
+                index = random.randint(0, self.count - 1)
                 # if wraps over current pointer, then get new one
-                if index >= self.position and index - self.history_length < self.position:
+                if self.position in self._circular_index(index - self.history_length,index+1):
                     continue
                 # if wraps over episode end, then get new one
-                if self.done[(index - self.history_length):index].any():
+                if self.done[self._circular_index(index - self.history_length,index)].any():
                     continue
                 # otherwise use this index
                 break
@@ -104,7 +113,11 @@ class ReplayMemory(object):
         return self.count
     
     def __getitem__(self,idx):
-        return self.memory[idx]
+        return  (self.get_state(idx-1),
+                self.get_state(idx),
+                self.actions[idx],
+                self.rewards[idx],
+                self.done[idx])
 
 class DQN(nn.Module):
 
@@ -114,7 +127,7 @@ class DQN(nn.Module):
         # an affine operation: y = Wx + b
         self.conv1 = nn.Conv2d(
             in_channels=config.FRAME_STACK,
-            out_channels=32,
+            out_channels=16,
             kernel_size=8,
             stride=4,
             padding=2)
@@ -124,8 +137,8 @@ class DQN(nn.Module):
                               stride = np.array(self.conv1.stride),
                               dilation = np.array(self.conv1.dilation))
         self.conv2 = nn.Conv2d(
-            in_channels=32,
-            out_channels=64,
+            in_channels=16,
+            out_channels=32,
             kernel_size=4,
             stride=2,
             padding=1)
@@ -173,15 +186,15 @@ def init_memory(env,buffer,initial_size,history_length):
         frame,action,reward,done,info = env.random_step()
         buffer.push(frame,action,reward,done)
         if done:
-            env.new_game()
+            frame = env.new_game()
             for _ in np.arange(history_length):
                 buffer.push(frame,0,0,False)
 
 
 def preprocess(img,dtype = np.float32):
 #    img_gray = np.mean(img, axis=2)
-    img_gray = np.dot(img[...,:3], [0.299, 0.587, 0.114])
-    img_down = imresize(img_gray,(84,84))
+    img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    img_down = imresize(img_gray,(84,84),interpolation=cv2.INTER_AREA)
     img_norm = img_down/255.
     img_norm = np.asarray(img_norm,dtype = dtype)
     return img_norm          
@@ -191,7 +204,7 @@ def preprocess(img,dtype = np.float32):
 def save_frames_as_gif(frames, path='./', filename='pong_animation.gif'):
 
     #Mess with this to change frame size
-    plt.figure(figsize=(frames[0].shape[1] / 200.0, frames[0].shape[0] / 200.0), dpi=144)
+    plt.figure(figsize=(frames[0].shape[1] / 50.0, frames[0].shape[0] / 50.0), dpi=144)
 
     patch = plt.imshow(frames[0])
     plt.axis('off')
@@ -201,11 +214,45 @@ def save_frames_as_gif(frames, path='./', filename='pong_animation.gif'):
 
     anim = animation.FuncAnimation(plt.gcf(), animate, frames = len(frames), interval=0)
     anim.save(path + filename, writer='imagemagick', fps=12)
+
+
+def train_step():
+    if len(memory) < config.BATCH_SIZE:
+        return None
+    
+    batch_state,batch_next_state,batch_action,batch_reward,batch_done = memory.sample()
+    batch_state = batch_state.to(config.DEVICE)
+    batch_next_state = batch_next_state.to(config.DEVICE)
+    batch_action = batch_action.to(config.DEVICE)
+    batch_reward = batch_reward.to(config.DEVICE)
+    batch_done = batch_done.to(config.DEVICE).byte()
+
+    current_Q = Q(batch_state).gather(1, batch_action.unsqueeze(1).long())
+
+    expected_Q = batch_reward.float()
+    expected_Q[~batch_done] += config.GAMMA * target_Q(batch_next_state[~batch_done]).max(1)[0].detach()
+
+    loss = F.mse_loss(current_Q, expected_Q.unsqueeze(1))
+    #loss = F.smooth_l1_loss(current_Q, current_Q.unsqueeze(1))
+    # Optimize the model
+    optimizer.zero_grad()
+    loss.backward()
+
+    for param in Q.parameters():
+        param.grad.data.clamp_(-1, 1)
+    optimizer.step()
+    return loss.item(),current_Q.mean().item()
+
+def predict(state,eps):
+    if np.random.rand() < eps:
+        return env.env.action_space.sample()
+    q_vals = Q(state.to(config.DEVICE).unsqueeze(0)).squeeze()
+    return q_vals.argmax().item()
     
 if __name__ == "__main__":
     class ENVIROMENT_CONFIG(object):
         ENV_NAME = 'PongDeterministic-v4'
-        RANDOM_START = 8
+        RANDOM_START = 0
         IMG_DTYPE = np.float32
         DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     class NN_CONFIG(ENVIROMENT_CONFIG):
@@ -226,7 +273,7 @@ if __name__ == "__main__":
         INITIAL_COLLECTION=50 * BASE
         REPEAT_ACTIONS = 1
         FRAME_STACK = 4
-        LEARNING_RATE = 1e-4
+        LEARNING_RATE = 5e-4
         SAVE_LATEST = 5
         
     config = DQN_CONFIG
@@ -243,40 +290,8 @@ if __name__ == "__main__":
     target_Q.load_state_dict(Q.state_dict())
     target_Q.eval()
     memory = ReplayMemory(config)
-    optimizer = optim.Adam(Q.parameters(),lr = config.LEARNING_RATE)
-    
-    def train_step():
-        if len(memory) < config.BATCH_SIZE:
-            return None
-        
-        batch_state,batch_next_state,batch_action,batch_reward,batch_done = memory.sample()
-        batch_state = batch_state.to(config.DEVICE)
-        batch_action = batch_action.to(config.DEVICE)
-        batch_next_state = batch_next_state.to(config.DEVICE)
-        batch_reward = batch_reward.to(config.DEVICE)
-        batch_done = batch_done.to(config.DEVICE).byte()
-    
-        current_Q = Q(batch_state).gather(1, batch_action.unsqueeze(1).long())
-    
-        expected_Q = batch_reward.float()
-        expected_Q[~batch_done] += config.GAMMA * target_Q(batch_next_state[~batch_done]).max(1)[0].detach()
-    
-        loss = F.mse_loss(current_Q, expected_Q.unsqueeze(1))
-        #loss = F.smooth_l1_loss(current_Q, current_Q.unsqueeze(1))
-        # Optimize the model
-        optimizer.zero_grad()
-        loss.backward()
-    
-        for param in Q.parameters():
-            param.grad.data.clamp_(-1, 1)
-        optimizer.step()
-        return loss.detach().item(),current_Q.mean().item()
+    optimizer = optim.Adam(Q.parameters(),lr = config.LEARNING_RATE)    
 
-    def predict(state,eps):
-        if np.random.rand() < eps:
-            return env.env.action_space.sample()
-        q_vals = Q(state.to(config.DEVICE).unsqueeze(0)).squeeze()
-        return q_vals.argmax().item()
     
     global_step = 0
     print("Begin initial replay memory collection.\n")
@@ -299,17 +314,18 @@ if __name__ == "__main__":
             cumulative_reward = 0
             for i in np.arange(config.REPEAT_ACTIONS):    
                 frame, reward, done, info = env.step(action)
+                cumulative_reward += reward
                 if done:
                     break
-                cumulative_reward += reward
             frame_buffer.add(frame)
             memory.push(frame, 
                         action,
                         cumulative_reward,
                         done)
             tot_reward += cumulative_reward
+#            raise
             loss,q_val = train_step()
-            if i_episode % config.TARGET_UPDATE == 0:
+            if global_step % config.TARGET_UPDATE == 0:
                 target_Q.load_state_dict(Q.state_dict())
                 torch.save(Q.state_dict(), 'pong_Q%d'%(global_step))
                 torch.save(target_Q.state_dict(), 'pong_Q_target_%d'%(global_step))
@@ -320,8 +336,7 @@ if __name__ == "__main__":
                 break  
                     
         train_hist += [tot_reward]
-        print("Epoch:%d Global step:%d Loss:%s Q value: %.3f Total Reward:%.2f Trail Length:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, loss, q_val, tot_reward, t+1, eps, time.time() - t_start, len(memory)))
-    
+        print("Epoch:%d Global step:%d Loss:%.5f Q value: %.5f Total Reward:%.0f Trail Length:%d Epsilon:%.2F Elapsed Time:%.2f Buffer size:%d"%(i_episode, global_step, loss, q_val, tot_reward, t+1, eps, time.time() - t_start, len(memory)))
     ###
     
     plt.figure(figsize = (10,10))

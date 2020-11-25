@@ -130,7 +130,7 @@ class DQN(nn.Module):
             out_channels=16,
             kernel_size=8,
             stride=4,
-            padding=2)
+            padding=0)
         out_shape = self.get_shape(np.array(config.IMAGE_SIZE),
                               padding = np.array(self.conv1.padding),
                               kernal_size = np.array(self.conv1.kernel_size),
@@ -141,14 +141,13 @@ class DQN(nn.Module):
             out_channels=32,
             kernel_size=4,
             stride=2,
-            padding=1)
+            padding=0)
         out_shape = self.get_shape(out_shape,
                               padding = np.array(self.conv2.padding),
                               kernal_size = np.array(self.conv2.kernel_size),
                               stride = np.array(self.conv2.stride),
                               dilation = np.array(self.conv2.dilation))
         self.fc1 = nn.Linear(out_shape[0]*out_shape[1]*self.conv2.out_channels, config.HIDDEN_SIZE)  # 6*6 from image dimension
-        #self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.out = nn.Linear(config.HIDDEN_SIZE, config.OUT_SIZE)
     
     def get_shape(self,in_size,padding,kernal_size,stride,dilation=1):
@@ -259,21 +258,21 @@ if __name__ == "__main__":
         HIDDEN_SIZE = 256
         
     class DQN_CONFIG(NN_CONFIG):
-        BASE = 100
-        BUFFER_SIZE = 500 * BASE 
+        BASE = 1000
+        BUFFER_SIZE = 200 * BASE 
         BATCH_SIZE = 32
         IMAGE_SIZE = (84,84)
         GAMMA = 1.0
         T_MAX = 5000
         EPISODE_MAX = 5000
-        TARGET_UPDATE = 5*BASE
+        TARGET_UPDATE = 1*BASE
         EPS_0 = 1.0
-        EPS_MIN = 0.02
-        EPS_LEN = 100*BASE
+        EPS_MIN = 0.1
+        EPS_LEN = 2*BUFFER_SIZE
         INITIAL_COLLECTION=50 * BASE
         REPEAT_ACTIONS = 1
         FRAME_STACK = 4
-        LEARNING_RATE = 5e-4
+        LEARNING_RATE = 1e-4
         SAVE_LATEST = 5
         
     config = DQN_CONFIG

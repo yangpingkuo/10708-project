@@ -224,7 +224,7 @@ def train_step():
     batch_next_state = batch_next_state.to(config.DEVICE)
     batch_action = batch_action.to(config.DEVICE)
     batch_reward = batch_reward.to(config.DEVICE)
-    batch_done = batch_done.to(config.DEVICE).byte()
+    batch_done = batch_done.to(config.DEVICE)
 
     current_Q = Q(batch_state).gather(1, batch_action.unsqueeze(1).long())
 
